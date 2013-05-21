@@ -42,7 +42,17 @@ cipher_table(default, Key) ->
 %%      Data = binary()     
 %% @end
 %%--------------------------------------------------------------------
+%% proplists:get_value is very very slow!!! as it's not BIF
+%% transform(Table, Data) when is_binary(Data)->
+%%     << <<(proplists:get_value(X, Table))>> || <<X>> <= Data >>;
+%% transform(Table, Data) when is_list(Data) ->
+%%     [ proplists:get_value(X, Table) || X <- Data ].
+
 transform(Table, Data) when is_binary(Data)->
-    << <<(proplists:get_value(X, Table))>> || <<X>> <= Data >>;
+    << <<(begin 
+              {X, Y} = lists:keyfind(X, 1, Table), Y
+          end)>> || <<X>> <= Data >>;
 transform(Table, Data) when is_list(Data) ->
-    [ proplists:get_value(X, Table) || X <- Data ].
+    [ begin 
+          {X, Y} = lists:keyfind(X, 1, Table), Y
+      end || X <- Data ].
