@@ -2,6 +2,8 @@ shadowsocks-erlang
 ===========
 Totally asynchronous implementation of Shadowsocks in Erlang.
 
+Original python version: https://github.com/clowwindy/shadowsocks
+
 Usage
 -----------
 * Compile
