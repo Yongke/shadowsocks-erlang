@@ -6,27 +6,25 @@ Usage
 -----------
 * Compile
 
-
     `./rebar clean & ./rebar compile`
 
   Of course, Elang OTP is needed, I am using R15B01, other versions should works fine(maybe should 
   use your own rebar)
 * Client side
 
-        erl -config ./local.config -pa ./ebin/ -boot start_sasl -s shadowsocks_app start -noshell
+    `erl -config ./local.config -pa ./ebin/ -boot start_sasl -s shadowsocks_app start -noshell`
 * Server side
    
-        erl -config ./remote.config -pa ./ebin/ -boot start_sasl -s shadowsocks_app start -noshell
+   `erl -config ./remote.config -pa ./ebin/ -boot start_sasl -s shadowsocks_app start -noshell`
 
 Configuration
 -----------
 * Config files
 
- local.config, remote.config
+    `local.config, remote.config`
 * Descriptions
 
--
-
+```erlang
      {shadowsocks,
      [
        {type, local},
@@ -36,12 +34,12 @@ Configuration
        {password,"barfoo!"},
        {method,default}
      ]}
-</code>
+```
 
 `{type, local}` is for client, `{type, remote}` is for server side.
 
 `{error_logger, {file, "log/shadowsocks_client.log"}}`, logs will be written 
-in `log/shadowsocks_client.log`, if you don't want it, use `{error_logger, silent}` instead
+in `log/shadowsocks_client.log`. If you don't want it, use `{error_logger, silent}` instead
 
 TODOs
 -----------
