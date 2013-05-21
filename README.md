@@ -14,10 +14,10 @@ Usage
   use your own rebar)
 * Client side
 
-    `erl -config ./local.config -pa ./ebin/ -boot start_sasl -s shadowsocks_app start -noshell`
+    `erl -config ./local.config -pa ./ebin/ -boot start_sasl -s shadowsocks_app start -detached -noinput -noshell`
 * Server side
    
-   `erl -config ./remote.config -pa ./ebin/ -boot start_sasl -s shadowsocks_app start -noshell`
+   `erl -config ./remote.config -pa ./ebin/ -boot start_sasl -s shadowsocks_app start -detached -noinput -noshell`
 
 Configuration
 -----------
