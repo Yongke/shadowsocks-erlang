@@ -25,16 +25,17 @@ Configuration
  local.config, remote.config
 * Descriptions
 
-<code>
-    {shadowsocks,
-    [
-      {type, local},
-      {local_port,1080},
-      {server,"localhost"},
-      {server_port,8388},
-      {password,"barfoo!"},
-      {method,default}
-    ]}
+-
+
+     {shadowsocks,
+     [
+       {type, local},
+       {local_port,1080},
+       {server,"localhost"},
+       {server_port,8388},
+       {password,"barfoo!"},
+       {method,default}
+     ]}
 </code>
 
 `{type, local}` is for client, `{type, remote}` is for server side.
