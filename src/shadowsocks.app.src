@@ -1,0 +1,19 @@
+{application, shadowsocks,
+ [
+  {description, "Erlang port of shadowsocks"},
+  {vsn, "1.0.0"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { shadowsocks_app, []}},
+  {env, [
+         {type, local},
+         {local_port, 1080}, 
+         {server, "localhost"},
+         {server_port, 8388},
+         {password, "barfoo!"},
+         {method, default}
+         ]}
+ ]}.
