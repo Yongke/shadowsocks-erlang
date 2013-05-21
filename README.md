@@ -25,8 +25,6 @@ Configuration
  local.config, remote.config
 * Descriptions
 
-`
-
     {shadowsocks,
     [
       {type, local},
@@ -36,7 +34,7 @@ Configuration
       {password,"barfoo!"},
       {method,default}
     ]}
-`
+
 
 `{type, local}` is for client, `{type, remote}` is for server side.
 
