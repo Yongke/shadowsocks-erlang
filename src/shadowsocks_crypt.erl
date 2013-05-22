@@ -22,16 +22,17 @@ cipher_table(default, Key) ->
     <<Value:64/little-unsigned-integer, _:64/little-unsigned-integer>> 
         = crypto:md5(Key),
     Init = lists:seq(0, 255),
-    Table = lists:foldl(
+    EncTable = lists:foldl(
               fun(I, Acc) ->
                       lists:sort(
                         fun(X, Y) ->
                                 Value rem (X + I) =< Value rem (Y + I)
                         end, Acc) 
               end, Init, lists:seq(1,1023)),
-    EncTable = lists:zip(Init, Table),
-    DecTable = lists:keysort(1, [{N, M} || {M, N} <- EncTable]),
-    {EncTable, DecTable}.
+    ZipTable = lists:zip(Init, EncTable),
+    ZipDecTable = lists:keysort(1, [{N, M} || {M, N} <- ZipTable]),
+    DecTable = [M || {_, M} <- ZipDecTable],
+    {list_to_tuple(EncTable), list_to_tuple(DecTable)}.
 
 %%--------------------------------------------------------------------
 %% @doc
@@ -42,17 +43,7 @@ cipher_table(default, Key) ->
 %%      Data = binary()     
 %% @end
 %%--------------------------------------------------------------------
-%% proplists:get_value is very very slow!!! as it's not BIF
-%% transform(Table, Data) when is_binary(Data)->
-%%     << <<(proplists:get_value(X, Table))>> || <<X>> <= Data >>;
-%% transform(Table, Data) when is_list(Data) ->
-%%     [ proplists:get_value(X, Table) || X <- Data ].
-
 transform(Table, Data) when is_binary(Data)->
-    << <<(begin 
-              {X, Y} = lists:keyfind(X, 1, Table), Y
-          end)>> || <<X>> <= Data >>;
+    << <<(element(X+1, Table))>> || <<X>> <= Data >>;
 transform(Table, Data) when is_list(Data) ->
-    [ begin 
-          {X, Y} = lists:keyfind(X, 1, Table), Y
-      end || X <- Data ].
+    [ element(X+1, Table) || X <- Data ].
