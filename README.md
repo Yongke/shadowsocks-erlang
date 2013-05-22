@@ -10,8 +10,8 @@ Usage
 
     `./rebar clean & ./rebar compile`
 
-  Of course, Elang OTP is needed, I am using R15B01, other versions should works fine(maybe should 
-  use your own rebar)
+  Of course, Elang OTP and rebar are needed. I am using R15B01, other versions should work fine.
+  
 * Client side
 
     `erl -smp auto -config ./local.config -pa ./ebin/ -boot start_sasl -s shadowsocks_app start -detached`
