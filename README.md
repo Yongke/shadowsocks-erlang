@@ -11,6 +11,7 @@ Usage
     `./rebar clean & ./rebar compile`
 
   Elang OTP(R16B01) and rebar are needed. crypto module in OTP improves a lot in R16B01, but unfortunately, the port which implement this module does use EVP_* functions. Which means almost all the block cipher method is not compatible with other shadowsocks implementation. 
+  default and rc4 method works fine.
   
 * Client side
 
