@@ -30,3 +30,15 @@
 -define(SOCKS5_REP_ATYP_NOT_SUPPORTED, 16#08).
 
 -define(SOCKS5_RESERVED_FIELD, 16#00).
+
+%% cipher info
+-record(cipher_info, {
+          method=default,      %% default | rc4 | aes_128_cfb | bf_cfb | des_cfb
+          table = {[], []},    %% table for default method only
+          key,
+          encode_iv,
+          iv_sent = false,     %% true | false
+          decode_iv,
+          stream_enc_state,    %% used in AES CTR and RC4 mode
+          stream_dec_state     %% used in AES CTR and RC4 mode
+         }).

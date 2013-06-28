@@ -26,6 +26,7 @@
          'WAIT_FOR_DATA'/2,
          'WAIT_FOR_SOCKS5_AUTH'/2,
          'WAIT_FOR_SOCKS5_REQUEST'/2,
+         'WAIT_FOR_IVEC'/2,
          'WAIT_FOR_TARGET_INFO'/2
         ]).
 
@@ -39,9 +40,7 @@
           remote_socket,    % remote socket
           remote_addr,      % remote addr
           remote_port,      % remote port
-          method,
-          encode_table,
-          decode_table,
+          cipher_info,      % #cipher_info{}
           buff = <<>>       % buffer used when handling socks5 handshake
          }).
 
@@ -59,27 +58,23 @@ set_socket(Pid, Socket) when is_pid(Pid), is_port(Socket) ->
 %%%===================================================================
 %%% gen_fsm callbacks
 %%%===================================================================
-init([local, _, ServerAddr, ServerPort, {EncodeTable, DecodeTable}, Method]) ->
+init([local, _, ServerAddr, ServerPort, #cipher_info{}=CipherInfo]) ->
     process_flag(trap_exit, true),
     {ok, 'WAIT_FOR_SOCKET', #state{type = local, 
                                    remote_addr = ServerAddr,
                                    remote_port = ServerPort,
-                                   encode_table = EncodeTable,
-                                   decode_table = DecodeTable,
-                                   method = Method}};
-init([remote, _, {EncodeTable, DecodeTable}, Method]) ->
+                                   cipher_info = CipherInfo}};
+init([remote, _, #cipher_info{}=CipherInfo]) ->
     process_flag(trap_exit, true),
     {ok, 'WAIT_FOR_SOCKET', #state{type = remote,
-                                   encode_table = EncodeTable,
-                                   decode_table = DecodeTable,
-                                   method = Method}}.
+                                   cipher_info = CipherInfo}}.
 
 %% For LOCAL instance:
 %%  WAIT_FOR_SOCKET -> WAIT_FOR_SOCKS5_AUTH -> WAIT_FOR_SOCKS5_REQUEST ->
-%%  WAIT_FOR_DATA <-> WAIT_FOR_DATA
+%%  WAIT_FOR_IVEC -> WAIT_FOR_DATA <-> WAIT_FOR_DATA
 %%
 %% For REMOTE instance: 
-%%  WAIT_FOR_SOCKET -> WAIT_FOR_TARGET_INFO -> 
+%%  WAIT_FOR_SOCKET -> WAIT_FOR_IVEC -> WAIT_FOR_TARGET_INFO ->
 %%  WAIT_FOR_DATA <-> WAIT_FOR_DATA
 'WAIT_FOR_SOCKET'({socket_ready, Socket}, #state{type=local}=State) 
   when is_port(Socket) ->
@@ -91,7 +86,7 @@ init([remote, _, {EncodeTable, DecodeTable}, Method]) ->
   when is_port(Socket) ->
     inet:setopts(Socket, [{active, once}, {packet, raw}, binary]),
     {ok, {IP, _Port}} = inet:peername(Socket),
-    {next_state, 'WAIT_FOR_TARGET_INFO', 
+    {next_state, 'WAIT_FOR_IVEC', 
      State#state{client_socket=Socket, client_addr=IP}, ?TIMEOUT};
 'WAIT_FOR_SOCKET'(Other, State) ->
     ?ERROR("Unexpected message: ~p\n", [Other]),
@@ -122,7 +117,7 @@ init([remote, _, {EncodeTable, DecodeTable}, Method]) ->
                             type=local,
                             client_socket=S, remote_addr=RemoteAddr,
                             remote_port=RemotePort,
-                            encode_table=EncTable} = State) ->
+                            cipher_info=CipherInfo } = State) ->
     Buffer = <<(State#state.buff)/binary, Data/binary>>,
     case decode_socks5_req(Buffer) of
         incomplete ->
@@ -142,16 +137,18 @@ init([remote, _, {EncodeTable, DecodeTable}, Method]) ->
                      end,
             gen_tcp:send(S, [Socks5Rsp, Target]),
             %% connect to remote server & send first message
+            {NewCipherInfo, EncodedTargert} = 
+                shadowsocks_crypt:encode(CipherInfo, Target),
             case gen_tcp:connect(RemoteAddr, RemotePort, [{active, once}, 
                                                           {packet, raw}, binary]) of
                 {ok, RemoteSocket} ->
                     ?INFO("Connected to remote ~p:~p for proxying ~p:~p\n", 
                           [RemoteAddr, RemotePort, Addr, Port]),
-                    gen_tcp:send(RemoteSocket, 
-                                 shadowsocks_crypt:transform(EncTable,Target)),
+                    gen_tcp:send(RemoteSocket, EncodedTargert),
                     gen_tcp:send(RemoteSocket, Rest),
-                    {next_state, 'WAIT_FOR_DATA', 
-                     State#state{buff= <<>>, remote_socket=RemoteSocket}, ?TIMEOUT};
+                    {next_state, 'WAIT_FOR_IVEC', 
+                     State#state{buff= <<>>, remote_socket=RemoteSocket,
+                                 cipher_info = NewCipherInfo}, ?TIMEOUT};
                 {error, Reason} ->
                     ?ERROR("'WAIT_FOR_SOCKS5_REQUEST' with error: ~p\n", [Reason]),
                     {stop, Reason, State}
@@ -165,14 +162,74 @@ init([remote, _, {EncodeTable, DecodeTable}, Method]) ->
            [Addr]),
     {stop, normal, State}.
 
-'WAIT_FOR_TARGET_INFO'({client, Data}, #state{type=remote, 
-                                              decode_table=DecTable}=State) ->
-    Data1 = shadowsocks_crypt:transform(DecTable, Data),
-    Buffer = <<(State#state.buff)/binary, Data1/binary>>,
-    case decode_target_info(Buffer) of
+%%IVec for decoding comes from the other side
+'WAIT_FOR_IVEC'({client, Data}, #state{type=remote, 
+                                       cipher_info = #cipher_info{method=Method}
+                                      }=State) 
+  when Method =:= default; Method =:= rc4 ->
+    ?MODULE:'WAIT_FOR_TARGET_INFO'({client, Data}, State);
+'WAIT_FOR_IVEC'({client, Data}, #state{
+                  type=remote,
+                  cipher_info=#cipher_info{
+                    method=Method,key=Key, decode_iv=undefined}=CipherInfo}
+                = State) ->
+    Buffer = <<(State#state.buff)/binary, Data/binary>>,
+    {_, IvLen} = shadowsocks_crypt:key_iv_len(Method),
+    case decode_ivec(Buffer, IvLen) of 
+        incomplete ->
+            {next_state, 'WAIT_FOR_IVEC',
+             State#state{buff=Buffer}, ?TIMEOUT};
+        {Iv, Rest} ->
+            StreamState = shadowsocks_crypt:stream_init(Method,Key,Iv),
+            State1 = State#state{
+                       buff = <<>>, 
+                       cipher_info = CipherInfo#cipher_info{
+                                       decode_iv=Iv,
+                                       stream_dec_state=StreamState}},
+            ?MODULE:'WAIT_FOR_TARGET_INFO'({client, Rest}, State1)
+    end;
+
+'WAIT_FOR_IVEC'({remote, Data}, #state{type=local, 
+                                       cipher_info = #cipher_info{method=Method}
+                                      }=State) 
+  when Method =:= default; Method =:= rc4 ->
+    ?MODULE:'WAIT_FOR_DATA'({remote, Data}, State);
+'WAIT_FOR_IVEC'({client, Data}, #state{
+                  type=local, 
+                  remote_socket = RemoteSocket,
+                  cipher_info =#cipher_info{decode_iv=undefined}=CipherInfo}
+                =State) ->
+    {NewCipherInfo,EncData} = shadowsocks_crypt:encode(CipherInfo, Data),
+    gen_tcp:send(RemoteSocket, EncData),
+    {next_state, 'WAIT_FOR_IVEC', State#state{cipher_info=NewCipherInfo}};
+'WAIT_FOR_IVEC'({remote, Data}, #state{
+                  type=local,
+                  cipher_info=#cipher_info{method=Method,key=Key,decode_iv=undefined}
+                  =CipherInfo} = State) ->
+    Buffer = <<(State#state.buff)/binary, Data/binary>>,
+    {_, IvLen} = shadowsocks_crypt:key_iv_len(Method),
+    case decode_ivec(Buffer, IvLen) of 
+        incomplete ->
+            {next_state, 'WAIT_FOR_IVEC',
+             State#state{buff=Buffer}, ?TIMEOUT};
+        {Iv, Rest} ->
+            StreamState = shadowsocks_crypt:stream_init(Method,Key,Iv),
+            State1 = State#state{buff = <<>>, cipher_info = 
+                                     CipherInfo#cipher_info{
+                                       decode_iv=Iv,
+                                       stream_dec_state=StreamState}},
+            ?MODULE:'WAIT_FOR_DATA'({remote, Rest}, State1)
+    end.
+
+'WAIT_FOR_TARGET_INFO'({client, Data}, #state{type=remote,
+                                              buff = Buff,
+                                              cipher_info=CipherInfo}=State) ->
+    {NewCipherInfo, Data1} = shadowsocks_crypt:decode(CipherInfo, Data),
+    case decode_target_info(Data1) of
         incomplete ->            
             {next_state, 'WAIT_FOR_TARGET_INFO',
-             State#state{buff=Buffer}, ?TIMEOUT};
+             State#state{buff= <<Buff/binary, Data1/binary>>,
+                        cipher_info = NewCipherInfo}, ?TIMEOUT};
         {error, _, _} = Error ->
             {stop, Error, State};
         {TargetAddr, TargetPort, Rest} ->
@@ -183,7 +240,8 @@ init([remote, _, {EncodeTable, DecodeTable}, Method]) ->
                     gen_tcp:send(RemoteSocket, Rest),
                     {next_state, 'WAIT_FOR_DATA',
                      State#state{buff= <<>>, remote_socket=RemoteSocket,
-                                remote_addr=TargetAddr, remote_port=TargetPort}, 
+                                 remote_addr=TargetAddr, remote_port=TargetPort,
+                                 cipher_info = NewCipherInfo}, 
                      ?TIMEOUT};
                 {error, Reason} ->
                     ?ERROR("Can not connect to remote ~p:~p, ~p\n", 
@@ -194,28 +252,28 @@ init([remote, _, {EncodeTable, DecodeTable}, Method]) ->
 
 'WAIT_FOR_DATA'({client, Data}, #state{type=local, 
                                        remote_socket=RemoteSocket, 
-                                       encode_table=EncTable} = State) ->
-    EncData = shadowsocks_crypt:transform(EncTable, Data),
+                                       cipher_info=CipherInfo} = State) ->
+    {NewCipherInfo,EncData} = shadowsocks_crypt:encode(CipherInfo, Data),
     gen_tcp:send(RemoteSocket, EncData),
-    {next_state, 'WAIT_FOR_DATA', State};
-'WAIT_FOR_DATA'({remote, Data}, #state{type=local,
-                                       client_socket=ClientSocket, 
-                                       decode_table=DecTable} = State) ->
-    DecData = shadowsocks_crypt:transform(DecTable, Data),
-    gen_tcp:send(ClientSocket, DecData),
-    {next_state, 'WAIT_FOR_DATA', State};
-'WAIT_FOR_DATA'({client, Data}, #state{type=remote, 
+    {next_state, 'WAIT_FOR_DATA', State#state{cipher_info=NewCipherInfo}};
+'WAIT_FOR_DATA'({remote, EncData}, #state{type=local,
+                                          client_socket=ClientSocket, 
+                                          cipher_info=CipherInfo} = State) ->
+    {NewCipherInfo, Data} = shadowsocks_crypt:decode(CipherInfo, EncData),
+    gen_tcp:send(ClientSocket, Data),
+    {next_state, 'WAIT_FOR_DATA', State#state{cipher_info=NewCipherInfo}};
+'WAIT_FOR_DATA'({client, EncData}, #state{type=remote, 
                                        remote_socket=RemoteSocket, 
-                                       decode_table=DecTable} = State) ->
-    DecData = shadowsocks_crypt:transform(DecTable, Data),
+                                       cipher_info=CipherInfo} = State) ->
+    {NewCipherInfo, DecData} = shadowsocks_crypt:decode(CipherInfo, EncData),
     gen_tcp:send(RemoteSocket, DecData),
-    {next_state, 'WAIT_FOR_DATA', State};
+    {next_state, 'WAIT_FOR_DATA', State#state{cipher_info=NewCipherInfo}};
 'WAIT_FOR_DATA'({remote, Data}, #state{type=remote,
                                        client_socket=ClientSocket, 
-                                       encode_table=EncTable} = State) ->
-    EncData = shadowsocks_crypt:transform(EncTable, Data),
+                                       cipher_info=CipherInfo} = State) ->
+    {NewCipherInfo, EncData} = shadowsocks_crypt:encode(CipherInfo, Data),
     gen_tcp:send(ClientSocket, EncData),
-    {next_state, 'WAIT_FOR_DATA', State};
+    {next_state, 'WAIT_FOR_DATA', State#state{cipher_info=NewCipherInfo}};
 'WAIT_FOR_DATA'(timeout, State) ->
     {stop, normal, State};
 'WAIT_FOR_DATA'(Data, State) ->
@@ -290,7 +348,6 @@ decode_socks5_req(<<?SOCKS5_VER:8/big, ?SOCKS5_REQ_CONNECT:8/big, _:8/big,
 decode_socks5_req(_) ->
     incomplete.
 
-
 decode_target_info(<<AddrType:8/big, _/binary>>) 
   when AddrType =/= ?SOCKS5_ATYP_V4, AddrType =/= ?SOCKS5_ATYP_DOM->
     {error, not_supported_address_type, AddrType};
@@ -302,3 +359,9 @@ decode_target_info(<<?SOCKS5_ATYP_DOM:8/big, DomLen:8/big, Domain:DomLen/binary,
     {binary_to_list(Domain), DestPort, Rest};
 decode_target_info(_) ->
     incomplete.
+
+decode_ivec(Data, IvLen) ->
+    case Data of
+        <<Iv:IvLen/binary, Rest/binary>> -> {Iv,Rest};
+        _ -> incomplete
+    end.
